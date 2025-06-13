@@ -95,3 +95,9 @@ dmypy.json
 
 # Pyre type checker
 .pyre/
+
+# Data directories
+input_data/*
+output_data/*
+!input_data/.gitkeep
+!output_data/.gitkeep
