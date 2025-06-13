@@ -1,5 +1,6 @@
 import networkx as nx
 from geopy.distance import geodesic
+import time
 from collections import defaultdict
 
 def create_road_network_graph(segments):
@@ -59,6 +60,113 @@ def create_road_network_graph(segments):
         return None
         
     return graph
+
+def simplify_graph(graph, junction_degree_threshold=3, max_nodes=500, verbose=True):
+    """
+    Simplifies a road network graph by:
+    1. Keeping important junction nodes (with degree >= junction_degree_threshold)
+    2. Removing pass-through nodes (nodes with exactly 2 connections)
+    3. Ensuring the simplified graph preserves the network topology
+    4. Optionally limiting the total number of nodes
+
+    Args:
+        graph: A networkx.MultiGraph representing the road network
+        junction_degree_threshold: Minimum degree to consider a node as junction (default=3)
+        max_nodes: Maximum number of nodes to keep in the simplified graph (default=500)
+        verbose: Whether to print progress information
+
+    Returns:
+        A simplified networkx.MultiGraph
+    """
+    if graph is None:
+        print("Cannot simplify a None graph")
+        return None
+    
+    if graph.number_of_nodes() <= max_nodes:
+        if verbose:
+            print(f"Graph already has {graph.number_of_nodes()} nodes, which is under the maximum of {max_nodes}. No simplification needed.")
+        return graph.copy()
+    
+    start_time = time.time()
+    if verbose:
+        print(f"Simplifying graph from {graph.number_of_nodes()} nodes...")
+    
+    # Create a copy to work with
+    simplified = graph.copy()
+    
+    # Step 1: Identify key junction nodes (with many connections)
+    junction_nodes = [node for node, degree in simplified.degree() if degree >= junction_degree_threshold]
+    if verbose:
+        print(f"Found {len(junction_nodes)} junction nodes with degree >= {junction_degree_threshold}")
+    
+    # Step 2: Identify pass-through nodes (degree exactly 2)
+    passthrough_nodes = [node for node, degree in simplified.degree() if degree == 2]
+    if verbose:
+        print(f"Found {len(passthrough_nodes)} pass-through nodes with degree = 2")
+    
+    # Step 3: Remove pass-through nodes (contract edges)
+    # Start with nodes that have the lowest impact (simplest to remove)
+    nodes_removed = 0
+    
+    for i, node in enumerate(passthrough_nodes):
+        # Check if we've reached our target
+        if simplified.number_of_nodes() <= max_nodes:
+            break
+            
+        # Skip if the node was already removed in previous iterations
+        if node not in simplified:
+            continue
+            
+        # Get the neighbors before removing the node
+        neighbors = list(simplified.neighbors(node))
+        if len(neighbors) != 2:  # Skip if degree is no longer 2
+            continue
+            
+        # Calculate the combined weight of the edges we're replacing
+        # Correct way to get edge data from a MultiGraph
+        n1_weight = min(d.get('weight', 1.0) for u, v, d in simplified.edges(node, neighbors[0], data=True))
+        n2_weight = min(d.get('weight', 1.0) for u, v, d in simplified.edges(node, neighbors[1], data=True))
+        combined_weight = n1_weight + n2_weight
+        
+        # Remove the node and add a direct edge between its neighbors
+        simplified.add_edge(neighbors[0], neighbors[1], weight=combined_weight)
+        simplified.remove_node(node)
+        nodes_removed += 1
+        
+        # Show progress periodically
+        if verbose and (i+1) % 100 == 0:
+            print(f"Processed {i+1}/{len(passthrough_nodes)} pass-through nodes. Graph now has {simplified.number_of_nodes()} nodes.")
+    
+    # Step 4: If we still have too many nodes, remove low-importance nodes
+    if simplified.number_of_nodes() > max_nodes:
+        # Sort nodes by degree (ascending - remove lowest-degree nodes first)
+        nodes_by_importance = sorted(simplified.degree(), key=lambda x: x[1])
+        
+        # Calculate how many more nodes to remove
+        nodes_to_remove = simplified.number_of_nodes() - max_nodes
+        
+        if verbose:
+            print(f"Still need to remove {nodes_to_remove} more nodes to reach target size of {max_nodes}")
+        
+        # Remove nodes until we reach our target
+        for i, (node, _) in enumerate(nodes_by_importance):
+            if i >= nodes_to_remove:
+                break
+            simplified.remove_node(node)
+    
+    # Final check - ensure we don't have any isolated nodes
+    isolated_nodes = list(nx.isolates(simplified))
+    if isolated_nodes:
+        if verbose:
+            print(f"Removing {len(isolated_nodes)} isolated nodes")
+        simplified.remove_nodes_from(isolated_nodes)
+    
+    if verbose:
+        print(f"Graph simplification complete: {graph.number_of_nodes()} nodes → {simplified.number_of_nodes()} nodes")
+        print(f"Simplification took {time.time() - start_time:.2f} seconds")
+    
+    return simplified
+
 
 if __name__ == '__main__':
     # Example Usage:
